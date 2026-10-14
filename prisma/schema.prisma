@@ -1,0 +1,520 @@
+// ReviewSpace data model.
+//
+// Isolation rule: every row that belongs to a workspace carries `workspaceId`,
+// and child rows reference their parent through a composite key
+// (`[parentId, workspaceId]`). The database itself therefore refuses a project
+// member, asset or share link that points across workspaces.
+//
+// Constraints Prisma cannot express (partial unique indexes, CHECKs) live in
+// the migration SQL and are listed next to the model they protect.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  CLIENT
+}
+
+enum AuthTokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum UploadStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+enum ReviewState {
+  DRAFT
+  IN_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+}
+
+enum ThreadVisibility {
+  PUBLIC
+  INTERNAL
+}
+
+enum ReviewRequestStatus {
+  OPEN
+  DECIDED
+  CANCELLED
+}
+
+enum DecisionType {
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum NotificationType {
+  MENTION
+  THREAD_REPLY
+  REVIEW_REQUESTED
+  CHANGES_REQUESTED
+  VERSION_APPROVED
+  WORKSPACE_INVITATION
+}
+
+enum SharePermission {
+  VIEW
+  COMMENT
+}
+
+// ─── Identity ────────────────────────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(cuid())
+  /// Always stored lower-cased and trimmed (see lib/validation).
+  email             String    @unique
+  name              String
+  image             String?
+  passwordHash      String?
+  emailVerified     DateTime?
+  /// Bumped on password reset / "sign out everywhere"; JWTs carrying an older
+  /// value are rejected by the data access layer.
+  sessionVersion    Int       @default(0)
+  /// Per-type email opt-outs, e.g. { "email": { "THREAD_REPLY": false } }.
+  /// In-app notifications are always on.
+  notificationPrefs Json      @default("{}")
+  /// Set for lightweight guest identities created when someone comments
+  /// through a share link. Guests have no password and cannot sign in.
+  guestShareLinkId  String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  authTokens         AuthToken[]
+  memberships        WorkspaceMember[]
+  invitationsSent    Invitation[]      @relation("InvitationInviter")
+  assetsCreated      Asset[]
+  versionsUploaded   AssetVersion[]
+  threadsCreated     CommentThread[]   @relation("ThreadCreator")
+  threadsResolved    CommentThread[]   @relation("ThreadResolver")
+  comments           Comment[]
+  reviewsRequested   ReviewRequest[]   @relation("ReviewRequester")
+  reviewsToApprove   ReviewRequest[]   @relation("ReviewApprover")
+  decisions          ReviewDecision[]
+  notifications      Notification[]    @relation("NotificationRecipient")
+  notificationsActed Notification[]    @relation("NotificationActor")
+  shareLinksCreated  ShareLink[]
+  auditEvents        AuditEvent[]
+  reactions          CommentReaction[]
+  guestShareLink     ShareLink?        @relation("ShareLinkGuests", fields: [guestShareLinkId], references: [id], onDelete: SetNull)
+
+  @@index([guestShareLinkId])
+  @@map("users")
+}
+
+/// Single-use tokens for email verification and password reset. Only a SHA-256
+/// hash of the token is stored; the raw value exists only in the emailed link.
+model AuthToken {
+  id        String           @id @default(cuid())
+  userId    String
+  purpose   AuthTokenPurpose
+  tokenHash String           @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("auth_tokens")
+}
+
+// ─── Workspaces ──────────────────────────────────────────────────────────────
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  /// Object path inside the private storage bucket, never a public URL.
+  logoPath  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members        WorkspaceMember[]
+  invitations    Invitation[]
+  projects       Project[]
+  projectMembers ProjectMember[]
+  assets         Asset[]
+  shareLinks     ShareLink[]
+  notifications  Notification[]
+  auditEvents    AuditEvent[]
+
+  @@map("workspaces")
+}
+
+/// "Last owner cannot be removed" is enforced in the service layer inside a
+/// transaction that locks the workspace's owner rows.
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectAccess ProjectMember[]
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+/// Migration SQL adds:
+///   UNIQUE (workspace_id, email) WHERE status = 'PENDING'
+/// so the same address cannot hold two live invitations to one workspace.
+model Invitation {
+  id          String           @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole
+  /// Optional: grant access to a single project on accept (client invites).
+  projectId   String?
+  tokenHash   String           @unique
+  status      InvitationStatus @default(PENDING)
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("InvitationInviter", fields: [invitedById], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([email])
+  @@map("invitations")
+}
+
+// ─── Projects ────────────────────────────────────────────────────────────────
+
+model Project {
+  id          String        @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  clientName  String?
+  dueDate     DateTime?
+  status      ProjectStatus @default(ACTIVE)
+  archivedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members     ProjectMember[]
+  assets      Asset[]
+  invitations Invitation[]
+  shareLinks  ShareLink[]
+  auditEvents AuditEvent[]
+
+  /// Target for composite foreign keys from child tables.
+  @@unique([id, workspaceId])
+  @@index([workspaceId, status])
+  @@map("projects")
+}
+
+/// Project-level access. The composite relation to WorkspaceMember means a
+/// user must belong to the project's workspace, and removing them from the
+/// workspace cascades away their project access.
+model ProjectMember {
+  id          String   @id @default(cuid())
+  projectId   String
+  workspaceId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  project         Project         @relation(fields: [projectId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspaceMember WorkspaceMember @relation(fields: [workspaceId, userId], references: [workspaceId, userId], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([workspaceId, userId])
+  @@map("project_members")
+}
+
+// ─── Assets & versions ───────────────────────────────────────────────────────
+
+model Asset {
+  id             String    @id @default(cuid())
+  projectId      String
+  workspaceId    String
+  name           String
+  createdById    String
+  /// Incremented atomically when a version is finalized, so concurrent uploads
+  /// never receive the same number.
+  versionCounter Int       @default(0)
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  project   Project        @relation(fields: [projectId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User           @relation(fields: [createdById], references: [id])
+  versions  AssetVersion[]
+
+  @@index([projectId])
+  @@map("assets")
+}
+
+/// A version's file is never replaced; a change is always a new version.
+/// `versionNumber` is null while the upload is pending and assigned on
+/// finalize, so failed uploads leave no gaps.
+model AssetVersion {
+  id            String       @id @default(cuid())
+  assetId       String
+  versionNumber Int?
+  storagePath   String
+  thumbnailPath String?
+  mimeType      String
+  sizeBytes     Int
+  width         Int?
+  height        Int?
+  changeSummary String?
+  uploadStatus  UploadStatus @default(PENDING)
+  reviewState   ReviewState  @default(DRAFT)
+  uploadedById  String
+  /// Atomic counter for per-version pin numbers (#1, #2, ...).
+  threadCounter Int          @default(0)
+  createdAt     DateTime     @default(now())
+  finalizedAt   DateTime?
+
+  asset          Asset            @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  uploadedBy     User             @relation(fields: [uploadedById], references: [id])
+  threads        CommentThread[]
+  reviewRequests ReviewRequest[]
+  decisions      ReviewDecision[]
+
+  @@unique([assetId, versionNumber])
+  @@index([assetId, uploadStatus])
+  @@map("asset_versions")
+}
+
+// ─── Comments ────────────────────────────────────────────────────────────────
+
+/// Pin position is normalized to the image (0–1 on both axes), never screen
+/// pixels. Migration SQL adds CHECK (x BETWEEN 0 AND 1 AND y BETWEEN 0 AND 1).
+model CommentThread {
+  id               String           @id @default(cuid())
+  versionId        String
+  number           Int
+  x                Float
+  y                Float
+  visibility       ThreadVisibility @default(PUBLIC)
+  createdById      String
+  /// Client-generated id; a retried or double-clicked submit maps to the
+  /// same row instead of creating a duplicate thread.
+  clientMutationId String
+  resolvedAt       DateTime?
+  resolvedById     String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  version    AssetVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  createdBy  User         @relation("ThreadCreator", fields: [createdById], references: [id])
+  resolvedBy User?        @relation("ThreadResolver", fields: [resolvedById], references: [id])
+  comments   Comment[]
+
+  @@unique([versionId, number])
+  @@unique([createdById, clientMutationId])
+  @@index([versionId, resolvedAt])
+  @@map("comment_threads")
+}
+
+model Comment {
+  id               String    @id @default(cuid())
+  threadId         String
+  authorId         String
+  /// Plain text. Rendered as text (never as HTML) to rule out stored XSS.
+  body             String
+  clientMutationId String
+  editedAt         DateTime?
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  thread      CommentThread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author      User                @relation(fields: [authorId], references: [id])
+  reactions   CommentReaction[]
+  attachments CommentAttachment[]
+
+  @@unique([authorId, clientMutationId])
+  @@index([threadId, createdAt])
+  @@map("comments")
+}
+
+/// One row per (comment, user, emoji); toggling removes the row.
+model CommentReaction {
+  id        String   @id @default(cuid())
+  commentId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId, emoji])
+  @@map("comment_reactions")
+}
+
+/// Image attached to a comment. Stored in the private bucket like versions;
+/// served only through short-lived signed URLs after a thread access check.
+model CommentAttachment {
+  id          String   @id @default(cuid())
+  commentId   String
+  storagePath String   @unique
+  fileName    String
+  mimeType    String
+  sizeBytes   Int
+  width       Int
+  height      Int
+  createdAt   DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([commentId])
+  @@map("comment_attachments")
+}
+
+// ─── Review & approval ───────────────────────────────────────────────────────
+
+/// Migration SQL adds:
+///   UNIQUE (version_id) WHERE status = 'OPEN'
+/// so a version has at most one live review (one designated approver in v1).
+model ReviewRequest {
+  id            String              @id @default(cuid())
+  versionId     String
+  approverId    String
+  requestedById String
+  status        ReviewRequestStatus @default(OPEN)
+  createdAt     DateTime            @default(now())
+  closedAt      DateTime?
+
+  version     AssetVersion    @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  approver    User            @relation("ReviewApprover", fields: [approverId], references: [id])
+  requestedBy User            @relation("ReviewRequester", fields: [requestedById], references: [id])
+  decision    ReviewDecision?
+
+  @@index([approverId, status])
+  @@map("review_requests")
+}
+
+/// Immutable history of who decided what on which version, and when.
+/// One decision per request: a concurrent second decision fails on the unique
+/// constraint rather than overwriting the first.
+model ReviewDecision {
+  id              String       @id @default(cuid())
+  reviewRequestId String       @unique
+  versionId       String
+  decidedById     String
+  decision        DecisionType
+  note            String?
+  createdAt       DateTime     @default(now())
+
+  reviewRequest ReviewRequest @relation(fields: [reviewRequestId], references: [id], onDelete: Cascade)
+  version       AssetVersion  @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  decidedBy     User          @relation(fields: [decidedById], references: [id])
+
+  @@index([versionId, createdAt])
+  @@map("review_decisions")
+}
+
+// ─── Notifications, sharing, audit ───────────────────────────────────────────
+
+model Notification {
+  id          String           @id @default(cuid())
+  userId      String
+  workspaceId String
+  type        NotificationType
+  actorId     String?
+  /// Deep-link target, e.g. { projectId, assetId, versionId, threadId }.
+  target      Json
+  /// Deterministic key (event + recipient) so a retried job never produces
+  /// a second copy of the same notification.
+  dedupeKey   String           @unique
+  readAt      DateTime?
+  createdAt   DateTime         @default(now())
+
+  user      User      @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actor     User?     @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+/// External review links. Only the token hash is stored. A share link can
+/// grant viewing or commenting, never approval.
+model ShareLink {
+  id           String          @id @default(cuid())
+  projectId    String
+  workspaceId  String
+  tokenHash    String          @unique
+  /// Free-text label shown in the share-link list, e.g. "Board review".
+  label        String?
+  permission   SharePermission @default(VIEW)
+  passwordHash String?
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  createdById  String
+  createdAt    DateTime        @default(now())
+
+  project   Project   @relation(fields: [projectId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation(fields: [createdById], references: [id])
+  guests    User[]    @relation("ShareLinkGuests")
+
+  @@index([projectId])
+  @@map("share_links")
+}
+
+/// Append-only activity history, separate from comments.
+model AuditEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  projectId   String?
+  actorId     String?
+  /// e.g. "asset.uploaded", "version.added", "review.requested",
+  /// "review.decided", "member.role_changed".
+  type        String
+  targetType  String
+  targetId    String
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId, createdAt])
+  @@map("audit_events")
+}
