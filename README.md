@@ -136,4 +136,3 @@ Every mutation follows the same path: **validate input → authenticate → auth
 - **Vercel + Supabase**: set `DATABASE_URL` (pooled), `SUPABASE_*`, `AUTH_SECRET`, `APP_URL` and `RESEND_API_KEY`.
 - **More than one instance**: set `REALTIME_DRIVER=postgres` and point `REALTIME_DATABASE_URL` at a direct (non-pooled) connection for `LISTEN`.
 - **Cleanup**: schedule `GET /api/cron/cleanup` (e.g. Vercel Cron) with `CRON_SECRET`.
-# reviewspace
