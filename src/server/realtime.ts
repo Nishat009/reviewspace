@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { Client } from "pg";
+import { Client, Pool } from "pg";
 import { env } from "@/lib/env";
 
 /**
@@ -75,15 +75,14 @@ async function ensurePgListener() {
   await state.connecting;
 }
 
-let publisher: Client | null = null;
+// One connection, queued by the pool: concurrent publishes neither open extra
+// connections nor overlap queries on the same client.
+let publisher: Pool | null = null;
 async function pgPublish(event: RealtimeEvent) {
   if (!publisher) {
-    const client = new Client({ connectionString: env.REALTIME_DATABASE_URL || env.DATABASE_URL });
-    client.on("error", () => {
-      if (publisher === client) publisher = null;
-    });
-    await client.connect();
-    publisher = client;
+    publisher = new Pool({ connectionString: env.REALTIME_DATABASE_URL || env.DATABASE_URL, max: 1 });
+    // Idle-connection errors; the pool replaces the client on next use.
+    publisher.on("error", () => {});
   }
   // NOTIFY payloads are capped at 8000 bytes; events carry only ids.
   await publisher.query("SELECT pg_notify($1, $2)", [PG_CHANNEL, JSON.stringify(event)]);
@@ -107,6 +106,17 @@ export async function publish(
     console.error("[realtime] publish failed", { type, error: (error as Error).message });
   }
   return event;
+}
+
+/**
+ * Closes the Postgres connections so a one-off script can exit. The app
+ * server never calls this.
+ */
+export async function closeRealtime() {
+  const closing = [publisher, hub.pg?.client];
+  publisher = null;
+  if (hub.pg) hub.pg.client = null;
+  await Promise.all(closing.map((connection) => connection?.end().catch(() => {})));
 }
 
 export async function subscribe(channel: string, listener: Listener) {

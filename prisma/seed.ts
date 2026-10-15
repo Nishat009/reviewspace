@@ -20,6 +20,7 @@ import { deleteWorkspace } from "@/server/member-service";
 import { createProject, setProjectArchived } from "@/server/project-service";
 import { decideReview, requestReview } from "@/server/review-service";
 import { createWorkspaceWithProject } from "@/server/workspace-service";
+import { closeRealtime } from "@/server/realtime";
 import { mentionMarkup } from "@/lib/mentions";
 import { checkoutSvg, homepageSvg, renderPng } from "./seed-images";
 
@@ -219,7 +220,7 @@ async function requestAndDecide(
 }
 
 main()
-  .then(() => db.$disconnect())
+  .then(() => Promise.all([db.$disconnect(), closeRealtime()]))
   .catch(async (error) => {
     console.error(error);
     await db.$disconnect();
