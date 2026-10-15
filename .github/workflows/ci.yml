@@ -71,6 +71,8 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/reviewspace
       E2E_SERVER: pnpm start
+      # Real Postgres here, so exercise the multi-instance LISTEN/NOTIFY path.
+      REALTIME_DRIVER: postgres
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
