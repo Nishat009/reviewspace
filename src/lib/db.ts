@@ -8,9 +8,10 @@ function createClient() {
   return new PrismaClient({ adapter });
 }
 
-// Reuse one client across hot reloads in development.
+// Route bundles share one pool in every environment. This also prevents
+// separate production bundles from opening concurrent prisma-dev connections.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 export const db = globalForPrisma.prisma ?? createClient();
 
-if (env.NODE_ENV !== "production") globalForPrisma.prisma = db;
+globalForPrisma.prisma = db;
