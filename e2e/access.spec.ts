@@ -21,7 +21,7 @@ test("another account gets a 404 for the workspace", async ({ page }) => {
   await page.context().clearCookies();
   await page.goto("/sign-up");
   await page.getByLabel("Name").fill("Outsider");
-  await page.getByLabel("Email").fill(`outsider-${Date.now()}@test.local`);
+  await page.getByLabel("Email").fill(process.env.E2E_OUTSIDER_EMAIL!);
   await page.getByLabel("Password").fill("outsider-password-1");
   await page.getByRole("button", { name: /create account/i }).click();
   await page.waitForURL(/\/onboarding/);

@@ -70,7 +70,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/reviewspace
-      E2E_SERVER: pnpm start
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/reviewspace_e2e
       # Real Postgres here, so exercise the multi-instance LISTEN/NOTIFY path.
       REALTIME_DRIVER: postgres
     steps:
@@ -82,6 +82,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:deploy
+      - name: Create E2E database
+        run: psql postgres://postgres:postgres@localhost:5432/reviewspace -c "CREATE DATABASE reviewspace_e2e"
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
