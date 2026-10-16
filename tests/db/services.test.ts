@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { cleanupFixtures } from "./cleanup";
 import { db } from "@/lib/db";
 import { authorizeProject, authorizeThread } from "@/server/access";
 import { startUpload } from "@/server/asset-service";
@@ -16,7 +17,7 @@ import { createAgency, createUser, expectAppError, member, mutationId, uploadVer
  * idempotency, sharing security and concurrent decisions.
  */
 afterAll(async () => {
-  await db.$disconnect();
+  try { await cleanupFixtures(db); } finally { await db.$disconnect(); }
   delete (globalThis as { prisma?: unknown }).prisma;
 });
 

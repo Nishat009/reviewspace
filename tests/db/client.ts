@@ -2,6 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/generated/prisma/client";
+import { trackUser, trackWorkspace } from "./cleanup";
 
 export function testDatabaseUrl() {
   const url = process.env.TEST_DATABASE_URL;
@@ -22,15 +23,15 @@ const uid = () => randomUUID().slice(0, 8);
 export async function seedTwoWorkspaces(db: PrismaClient) {
   const [alice, bob] = await Promise.all(
     ["alice", "bob"].map((name) =>
-      db.user.create({ data: { name, email: `${name}-${uid()}@test.local` } }),
+      db.user.create({ data: { name, email: `${name}-${uid()}@test.local` } }).then(trackUser),
     ),
   );
   const workspaceA = await db.workspace.create({
     data: { name: "A", slug: `a-${uid()}`, members: { create: { userId: alice.id, role: "OWNER" } } },
-  });
+  }).then(trackWorkspace);
   const workspaceB = await db.workspace.create({
     data: { name: "B", slug: `b-${uid()}`, members: { create: { userId: bob.id, role: "OWNER" } } },
-  });
+  }).then(trackWorkspace);
   const projectA = await db.project.create({ data: { workspaceId: workspaceA.id, name: "Project A" } });
   const projectB = await db.project.create({ data: { workspaceId: workspaceB.id, name: "Project B" } });
   return { alice, bob, workspaceA, workspaceB, projectA, projectB };

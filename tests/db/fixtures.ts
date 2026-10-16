@@ -4,6 +4,7 @@ import type { WorkspaceRole } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { uploadObject } from "@/lib/storage";
 import { finalizeUpload, startUpload } from "@/server/asset-service";
+import { trackUser, trackWorkspace } from "./cleanup";
 
 /**
  * Fixtures for service-level tests. Everything goes through the app's own
@@ -17,7 +18,7 @@ export async function createUser(name: string) {
   return db.user.create({
     data: { name, email: `${name.toLowerCase()}-${uid()}@test.local`, emailVerified: new Date() },
     select: { id: true, name: true, email: true },
-  });
+  }).then(trackUser);
 }
 
 /**
@@ -39,7 +40,7 @@ export async function createAgency() {
       },
     },
     select: { id: true, slug: true },
-  });
+  }).then(trackWorkspace);
   const project = await db.project.create({
     data: {
       workspaceId: workspace.id,

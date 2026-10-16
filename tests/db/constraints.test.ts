@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { createTestClient, seedTwoWorkspaces } from "./client";
+import { cleanupFixtures } from "./cleanup";
 
 let db: PrismaClient;
 
@@ -9,7 +10,7 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
-  await db.$disconnect();
+  try { await cleanupFixtures(db); } finally { await db.$disconnect(); }
 });
 
 describe("multi-workspace isolation (enforced by the database)", () => {
