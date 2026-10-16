@@ -73,12 +73,19 @@ The seed covers three Homepage versions and two Checkout versions, open and reso
 | `pnpm lint` | ESLint |
 | `pnpm test` | Unit tests: pin math, permission matrix, review state machine, mentions, tokens, redirects |
 | `pnpm test:db` | Integration tests against `TEST_DATABASE_URL` (must be a separate database) |
-| `pnpm test:e2e` | Playwright, two-browser flows (re-seeds demo data; starts `pnpm dev` if nothing is running) |
+| `pnpm test:e2e` | Playwright two-browser flows against an isolated production server (run `pnpm build` first) |
 | `pnpm storybook` / `pnpm build-storybook` | Component docs |
+| `pnpm test:storybook` | Render every built story in Chromium and check for JavaScript errors |
 | `pnpm db:migrate` / `pnpm db:seed` / `pnpm db:studio` | Database |
 | `pnpm uploads:cleanup` | Removes abandoned and failed uploads (also available as `GET /api/cron/cleanup` with `Authorization: Bearer $CRON_SECRET`) |
 
 `prisma dev` routes every database name to the same instance, so the test database needs its own server: `npx prisma dev --name reviewspace-test --detach`. The test setup refuses to run if it detects that it points at the app database.
+
+Browser tests use `E2E_DATABASE_URL`, falling back to `TEST_DATABASE_URL`, and refuse the app database. They apply migrations and seed the demo users in that test database, then start their own production server. Set `E2E_PORT` (default 3000) to choose a free local port; `APP_URL` automatically matches it. Existing servers are never reused. Temporary local uploads and the browser run's demo users, workspaces, and outsider account are removed on teardown. Integration tests also remove their own tracked fixtures. Do not run the database and browser suites concurrently against the same test database.
+
+On Windows PowerShell with script execution disabled, use `pnpm.cmd` instead of `pnpm`; no execution-policy change is needed.
+
+E2E uses the explicit `EMAIL_DRIVER=console` transport and never sends real email. For deployed delivery use `EMAIL_DRIVER=resend`, a valid `RESEND_API_KEY`, and an authorized `EMAIL_FROM`. Unit tests cover transport success, provider rejection, network failure, and HTML escaping; real Resend/Supabase verification still needs their credentials.
 
 ## Architecture
 
