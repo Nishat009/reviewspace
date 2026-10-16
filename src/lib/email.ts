@@ -11,6 +11,10 @@ const resend = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
  * primary write (sign-up, invitation, ...) has already committed.
  */
 export async function sendEmail(email: Email): Promise<boolean> {
+  if (env.EMAIL_DRIVER === "console") {
+    console.info(`\n[email:console] to=${email.to} subject="${email.subject}"\n${email.text}\n`);
+    return true;
+  }
   if (!resend) {
     if (env.NODE_ENV === "test") return true;
     if (env.NODE_ENV === "development") {

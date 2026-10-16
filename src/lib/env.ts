@@ -23,6 +23,8 @@ const schema = z.object({
   AUTH_GOOGLE_ID: z.string().optional().default(""),
   AUTH_GOOGLE_SECRET: z.string().optional().default(""),
   RESEND_API_KEY: z.string().optional().default(""),
+  /** Explicit console transport for local production-build tests. */
+  EMAIL_DRIVER: z.enum(["resend", "console"]).optional(),
   EMAIL_FROM: z.string().min(1).default("ReviewSpace <onboarding@resend.dev>"),
 });
 
