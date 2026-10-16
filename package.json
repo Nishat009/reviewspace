@@ -22,7 +22,8 @@
     "uploads:cleanup": "tsx --require ./scripts/server-only-shim.cjs scripts/cleanup-uploads.ts",
     "test:e2e": "playwright test",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "test:storybook": "node scripts/test-storybook.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
